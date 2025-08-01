@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 replace_code() {
     # move contents from ~/temp to ~/deploy

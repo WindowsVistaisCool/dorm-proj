@@ -619,31 +619,42 @@ class LEDThemes:
             # Balance between wave visibility and smoothness
             base_increment = 85  # Increased for more visible waves
             wave_increment = max(base_increment, (32768 // num_pixels)) if num_pixels > 0 else 200
+            
+            # Process pixels in chunks to allow for break checking
+            chunk_size = 50  # Process 50 pixels at a time
+            for chunk_start in range(0, num_pixels, chunk_size):
+                if self.checkBreak():
+                    return True
+                    
+                chunk_end = min(chunk_start + chunk_size, num_pixels)
                 
-            for i in range(num_pixels):
-                waveangle = (waveangle + wave_increment) & 0xFFFF  # Much smoother spatial progression
-                s16 = (FastLEDFunctions.sin16(waveangle) + 32768) & 0xFFFF
-                cs = (FastLEDFunctions.scale16(s16, wavescale_half) + wavescale_half) & 0xFFFF
-                ci = (ci + cs) & 0xFFFF  # Keep 16-bit
+                # Calculate waveangle for this chunk start
+                chunk_waveangle = (waveangle + wave_increment * chunk_start) & 0xFFFF
                 
-                # Generate much smoother color index with better resolution
-                sindex16 = (FastLEDFunctions.sin16(ci) + 32768) & 0xFFFF
-                # Use full palette range with higher precision
-                sindex8 = FastLEDFunctions.scale16(sindex16, 255) & 0xFF
-                
-                # Add more noticeable brightness variation for wave definition
-                brightness_variation = FastLEDFunctions.scale8(FastLEDFunctions.sin8((ci >> 8) & 0xFF), 35)  # Increased from 20
-                adjusted_brightness = max(20, min(255, bri_8b + brightness_variation - 15)) & 0xFF  # Wider range
-                
-                new_color = FastLEDFunctions.ColorFromPalette(palette, sindex8, adjusted_brightness, "LINEARBLEND")
-                
-                # Balanced blending - use 75% new color, 25% existing for visible waves with smoothness  
-                existing = led_buffer[i]
-                blend_factor = 192  # 75% in 8-bit (192/255) - more visible than 85%
-                r = FastLEDFunctions.blend8(existing[0], new_color[0], blend_factor)
-                g = FastLEDFunctions.blend8(existing[1], new_color[1], blend_factor)
-                b = FastLEDFunctions.blend8(existing[2], new_color[2], blend_factor)
-                led_buffer[i] = (r, g, b)
+                for i in range(chunk_start, chunk_end):
+                    chunk_waveangle = (chunk_waveangle + wave_increment) & 0xFFFF
+                    s16 = (FastLEDFunctions.sin16(chunk_waveangle) + 32768) & 0xFFFF
+                    cs = (FastLEDFunctions.scale16(s16, wavescale_half) + wavescale_half) & 0xFFFF
+                    ci = (ci + cs) & 0xFFFF  # Keep 16-bit
+                    
+                    # Generate much smoother color index with better resolution
+                    sindex16 = (FastLEDFunctions.sin16(ci) + 32768) & 0xFFFF
+                    # Use full palette range with higher precision
+                    sindex8 = FastLEDFunctions.scale16(sindex16, 255) & 0xFF
+                    
+                    # Add more noticeable brightness variation for wave definition
+                    brightness_variation = FastLEDFunctions.scale8(FastLEDFunctions.sin8((ci >> 8) & 0xFF), 35)  # Increased from 20
+                    adjusted_brightness = max(20, min(255, bri_8b + brightness_variation - 15)) & 0xFF  # Wider range
+                    
+                    new_color = FastLEDFunctions.ColorFromPalette(palette, sindex8, adjusted_brightness, "LINEARBLEND")
+                    
+                    # Balanced blending - use 75% new color, 25% existing for visible waves with smoothness  
+                    existing = led_buffer[i]
+                    blend_factor = 192  # 75% in 8-bit (192/255) - more visible than 85%
+                    r = FastLEDFunctions.blend8(existing[0], new_color[0], blend_factor)
+                    g = FastLEDFunctions.blend8(existing[1], new_color[1], blend_factor)
+                    b = FastLEDFunctions.blend8(existing[2], new_color[2], blend_factor)
+                    led_buffer[i] = (r, g, b)
         def target(self: 'LEDTheme'):
             nonlocal ms_0, lastms_32b
             nonlocal sCIStart1, sCIStart2, sCIStart3, sCIStart4
@@ -723,58 +734,75 @@ class LEDThemes:
             if self.checkBreak():
                 return True
                 
-            # Process whitecaps and color deepening in a single loop for efficiency
-            for i in range(num_pixels):
-                threshold_8b = (FastLEDFunctions.scale8(FastLEDFunctions.sin8(wave_8b), 20) + basethreshold_8b) & 0xFF
-                wave_8b = (wave_8b + 7) & 0xFF
+            # Process whitecaps and color deepening in chunks for better responsiveness
+            chunk_size = 75  # Process 75 pixels at a time
+            for chunk_start in range(0, num_pixels, chunk_size):
+                if self.checkBreak():
+                    return True
+                    
+                chunk_end = min(chunk_start + chunk_size, num_pixels)
+                local_wave_8b = (wave_8b + chunk_start * 7) & 0xFF  # Calculate starting wave for this chunk
                 
-                rgb = list(led_buffer[i])  # Convert to list once
-                light_8b = FastLEDFunctions.getAverageLight(rgb)
-                
-                # Apply whitecaps with smoother transitions
-                if light_8b > threshold_8b:
-                    overage_8b = light_8b - threshold_8b
-                    # Smooth the overage effect to reduce harsh transitions
-                    smooth_overage = FastLEDFunctions.scale8(overage_8b, 180)  # Reduce intensity
-                    overage2_8b = min(255, smooth_overage + (smooth_overage >> 1))
-                    overage4_8b = min(255, overage2_8b + (overage2_8b >> 1))
-                    rgb[0] = min(255, rgb[0] + smooth_overage)
-                    rgb[1] = min(255, rgb[1] + overage2_8b)
-                    rgb[2] = min(255, rgb[2] + overage4_8b)
-                
-                # Deepen colors and add minimum values with gentler scaling
-                rgb[0] = (FastLEDFunctions.scale8(rgb[0], 245) | 2) & 0xFF  # Slightly reduced scaling
-                rgb[1] = (FastLEDFunctions.scale8(rgb[1], 190) | 4) & 0xFF  # Adjusted scaling
-                rgb[2] = (FastLEDFunctions.scale8(rgb[2], 135) | 6) & 0xFF  # Adjusted scaling
-                
-                led_buffer[i] = tuple(rgb)
+                for i in range(chunk_start, chunk_end):
+                    threshold_8b = (FastLEDFunctions.scale8(FastLEDFunctions.sin8(local_wave_8b), 20) + basethreshold_8b) & 0xFF
+                    local_wave_8b = (local_wave_8b + 7) & 0xFF
+                    
+                    rgb = list(led_buffer[i])  # Convert to list once
+                    light_8b = FastLEDFunctions.getAverageLight(rgb)
+                    
+                    # Apply whitecaps with smoother transitions
+                    if light_8b > threshold_8b:
+                        overage_8b = light_8b - threshold_8b
+                        # Smooth the overage effect to reduce harsh transitions
+                        smooth_overage = FastLEDFunctions.scale8(overage_8b, 180)  # Reduce intensity
+                        overage2_8b = min(255, smooth_overage + (smooth_overage >> 1))
+                        overage4_8b = min(255, overage2_8b + (overage2_8b >> 1))
+                        rgb[0] = min(255, rgb[0] + smooth_overage)
+                        rgb[1] = min(255, rgb[1] + overage2_8b)
+                        rgb[2] = min(255, rgb[2] + overage4_8b)
+                    
+                    # Deepen colors and add minimum values with gentler scaling
+                    rgb[0] = (FastLEDFunctions.scale8(rgb[0], 245) | 2) & 0xFF  # Slightly reduced scaling
+                    rgb[1] = (FastLEDFunctions.scale8(rgb[1], 190) | 4) & 0xFF  # Adjusted scaling
+                    rgb[2] = (FastLEDFunctions.scale8(rgb[2], 135) | 6) & 0xFF  # Adjusted scaling
+                    
+                    led_buffer[i] = tuple(rgb)
 
             # Apply moderate spatial smoothing to balance wave visibility with smoothness
             if num_pixels > 4:
                 smoothed_buffer = list(led_buffer)
-                # Use 3-point smoothing for visible waves: 25% + 50% + 25%
-                for i in range(1, num_pixels - 1):
+                # Process smoothing in chunks for better break responsiveness
+                smooth_chunk_size = 100
+                for chunk_start in range(1, num_pixels - 1, smooth_chunk_size):
                     if self.checkBreak():
                         return True
+                        
+                    chunk_end = min(chunk_start + smooth_chunk_size, num_pixels - 1)
                     
-                    # 3-point weighted average for balanced smoothness and wave visibility
-                    prev_color = led_buffer[i-1]
-                    curr_color = led_buffer[i]
-                    next_color = led_buffer[i+1]
-                    
-                    # Weights: 25% + 50% + 25% = 64 + 128 + 64 = 256
-                    smoothed_r = (prev_color[0] * 64 + curr_color[0] * 128 + next_color[0] * 64) >> 8
-                    smoothed_g = (prev_color[1] * 64 + curr_color[1] * 128 + next_color[1] * 64) >> 8
-                    smoothed_b = (prev_color[2] * 64 + curr_color[2] * 128 + next_color[2] * 64) >> 8
-                    
-                    smoothed_buffer[i] = (smoothed_r & 0xFF, smoothed_g & 0xFF, smoothed_b & 0xFF)
+                    # Use 3-point smoothing for visible waves: 25% + 50% + 25%
+                    for i in range(chunk_start, chunk_end):
+                        # 3-point weighted average for balanced smoothness and wave visibility
+                        prev_color = led_buffer[i-1]
+                        curr_color = led_buffer[i]
+                        next_color = led_buffer[i+1]
+                        
+                        # Weights: 25% + 50% + 25% = 64 + 128 + 64 = 256
+                        smoothed_r = (prev_color[0] * 64 + curr_color[0] * 128 + next_color[0] * 64) >> 8
+                        smoothed_g = (prev_color[1] * 64 + curr_color[1] * 128 + next_color[1] * 64) >> 8
+                        smoothed_b = (prev_color[2] * 64 + curr_color[2] * 128 + next_color[2] * 64) >> 8
+                        
+                        smoothed_buffer[i] = (smoothed_r & 0xFF, smoothed_g & 0xFF, smoothed_b & 0xFF)
                 
-                # Update LED strip with balanced smoothing
-                for i in range(num_pixels):
+                # Update LED strip with balanced smoothing in chunks
+                update_chunk_size = 100
+                for chunk_start in range(0, num_pixels, update_chunk_size):
                     if self.checkBreak():
                         return True
-                    rgb = smoothed_buffer[i]
-                    self.leds.setPixelColorRGB(i, rgb[0], rgb[1], rgb[2])
+                        
+                    chunk_end = min(chunk_start + update_chunk_size, num_pixels)
+                    for i in range(chunk_start, chunk_end):
+                        rgb = smoothed_buffer[i]
+                        self.leds.setPixelColorRGB(i, rgb[0], rgb[1], rgb[2])
             elif num_pixels > 2:
                 # 3-point smoothing for shorter strips
                 smoothed_buffer = list(led_buffer)

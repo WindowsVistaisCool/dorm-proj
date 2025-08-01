@@ -4,97 +4,139 @@ if TYPE_CHECKING:
     from App import App
 
 import customtkinter as ctk
+import time
 from lib.Navigation import NavigationPage
-from lib.Notifier import NotifierService
+
+# Try to import performance monitoring
+try:
+    from lib.PerformanceMonitor import get_performance_monitor, start_performance_monitoring
+    PERFORMANCE_MONITORING = True
+except ImportError:
+    PERFORMANCE_MONITORING = False
 
 class DebugPage(NavigationPage):
-    PLATFORM_TEXT = "OS: ben\n"*10
 
     def __init__(self, navigator, appRoot: 'App', master, **kwargs):
         super().__init__(navigator, master, title="Debug", **kwargs)
         self.appRoot: 'App' = appRoot
+        
+        self.performance_monitor = None
+        if PERFORMANCE_MONITORING:
+            self.performance_monitor = get_performance_monitor()
+            start_performance_monitoring()
+        
         self._initUI()
         self._initCommands()
+        
+        # Start updating performance display
+        if PERFORMANCE_MONITORING:
+            self._updatePerformanceDisplay()
 
     def _initUI(self):
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # Original debug title
         self.ui.add(ctk.CTkLabel, "title",
-                    text="hehehaw this is the debug page!!!! grrrr",
+                    text="🐛 Debug & Performance",
                     font=(self.appRoot.FONT_NAME, 24)
                     ).grid(row=0, column=0, columnspan=10, padx=20, pady=20, sticky="nw")
 
-        self.ui.add(ctk.CTkButton, "destroy",
-                    text="fade BUTTON!!!",
-                    ).grid(row=1, column=0, padx=20, pady=0, sticky="nw")
-        
-        self.ui.add(ctk.CTkButton, "test_about",
-                    text="Test About Page",
-                    ).grid(row=1, column=1, padx=20, pady=0, sticky="nw")
+        # Performance monitoring section
+        if PERFORMANCE_MONITORING:
+            perf_frame = self.ui.add(ctk.CTkFrame, "perf_frame",
+                                    corner_radius=12
+                                    ).grid(row=1, column=0, columnspan=10, padx=20, pady=(0, 20), sticky="nsew")
+            
+            perf_frame.getInstance().grid_columnconfigure(0, weight=1)
+            perf_frame.getInstance().grid_rowconfigure(1, weight=1)
 
-        self.ui.add(ctk.CTkButton, "rebuild",
-                    text="disable ui???",
-                    ).grid(row=2, column=0, padx=20, pady=0, sticky="nw")
-
-        self.ui.add(ctk.CTkButton, "cause_exception",
-                    text="Cause Exception",
-                    ).grid(row=2, column=1, padx=20, pady=0, sticky="nw")
-
-        self.ui.add(ctk.CTkButton, "notify_test",
-                    text="Notify Test"
-                    ).grid(row=3, column=0, padx=20, pady=0, sticky="nw")
-    
-        f_specs = self.ui.add(ctk.CTkFrame, "f_specs",
-                    width=400, height=50,
-                    ).withGridProperties(row=4, column=0, columnspan=2, padx=30, pady=10, sticky="we")
-        f_specs.getInstance().grid_columnconfigure(0, weight=1)
-        f_specs.grid()
-
-        self.ui.add(ctk.CTkLabel, "l_specs",
-                    root=f_specs.getInstance(),
-                    text="Hardware Specifications:",
-                    font=(self.appRoot.FONT_NAME, 16, "bold")
-                    ).grid(row=0, column=0, padx=10, pady=5, sticky="nsw")
-    
-        self.ui.add(ctk.CTkLabel, "l_specs_pc",
-                    root=f_specs.getInstance(),
-                    text=self.PLATFORM_TEXT,
-                    font=(self.appRoot.FONT_NAME, 14),
-                    justify="left"
-                    ).grid(row=1, column=0, padx=10, pady=(10, 5), sticky="nsw")
+            self.ui.add(ctk.CTkLabel, "perf_title",
+                        root=perf_frame.getInstance(),
+                        text="System Performance Monitor",
+                        font=(self.appRoot.FONT_NAME, 18, "bold")
+                        ).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+            
+            self.ui.add(ctk.CTkTextbox, "perf_display",
+                        root=perf_frame.getInstance(),
+                        height=200,
+                        font=(self.appRoot.FONT_NAME, 10)
+                        ).grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
+        else:
+            self.ui.add(ctk.CTkLabel, "no_perf",
+                        text="Performance monitoring not available (psutil not installed)",
+                        font=(self.appRoot.FONT_NAME, 14)
+                        ).grid(row=1, column=0, columnspan=10, padx=20, pady=20, sticky="w")
 
     def _initCommands(self):
-        def fade():
-            def fadeOut():
-                alpha = self.appRoot.attributes("-alpha")
-                print(alpha)
-                if alpha > 0:
-                    self.appRoot.attributes("-alpha", alpha - 0.05)
-                    self.appRoot.after(50, fadeOut)
-                else:
-                    self.appRoot.destroy()
-            fadeOut()
+        pass
 
-        self.ui.get("destroy").setCommand(fade)
-
-        def rebuild():
-            for _, item in self.ui.items.items():
+    def _updatePerformanceDisplay(self):
+        """Update performance display every second"""
+        if not PERFORMANCE_MONITORING or not self.performance_monitor:
+            return
+            
+        try:
+            summary = self.performance_monitor.get_performance_summary()
+            
+            # Get additional system info
+            import threading
+            import os
+            
+            # Try to get CPU affinity (safely)
+            try:
+                import psutil
+                process = psutil.Process()
                 try:
-                    item.getInstance().configure(state="disabled")
-                except:
-                    print("womp")
-        self.ui.get("rebuild").setCommand(rebuild)
+                    cpu_affinity = list(process.cpu_affinity())
+                except (psutil.AccessDenied, OSError, AttributeError):
+                    cpu_affinity = "Not available"
+                    
+                cpu_count = psutil.cpu_count()
+                
+                # Get per-core CPU usage
+                cpu_per_core = psutil.cpu_percent(percpu=True)
+            except ImportError:
+                cpu_affinity = "psutil not available"
+                cpu_count = "Unknown" 
+                cpu_per_core = []
+            except Exception:
+                cpu_affinity = "Error reading"
+                cpu_count = "Unknown"
+                cpu_per_core = []
+            
+            display_text = f"""System Performance Monitor - {time.strftime('%H:%M:%S')}
 
-        def notifasodf():
-            # self.appRoot.navigation.navigate(AboutPage)
-            NotifierService.notify("get ready for this ultra mega goofy thing")
-            # self.appRoot.after(3250, lambda: self.appRoot.toggleNav(True))
+CPU & Memory:
+  Overall CPU Usage: {summary['cpu_usage']:.1f}%
+  Memory Usage: {summary['memory_usage']:.1f}%
+  CPU Count: {cpu_count}
+  CPU Affinity: {cpu_affinity}
 
-        self.ui.addCommand("test_about", notifasodf)
+Per-Core Usage:"""
+            
+            for i, usage in enumerate(cpu_per_core):
+                core_role = "UI" if i in [0, 1] else "LED"
+                display_text += f"\n  Core {i} ({core_role}): {usage:.1f}%"
+            
+            display_text += f"""
 
-        def raise_exception():
-            raise Exception("This exception is meant to happen!")
-        self.ui.get("cause_exception").setCommand(raise_exception)
+LED Processing:
+  LED FPS: {summary['led_fps']:.1f} (target: 60)
+  Frame Time: {summary['led_frame_time_ms']:.1f} ms (target: <16.7ms)
+
+Threading:
+  Process ID: {summary['process_id']}
+  Active Threads: {summary['thread_count']}
+"""
+            
+            textbox = self.ui.get("perf_display")
+            if textbox and textbox.getInstance():
+                textbox.getInstance().delete("0.0", "end")
+                textbox.getInstance().insert("0.0", display_text)
+                
+        except Exception as e:
+            print(f"Performance display update error: {e}")
         
-        def ashkjsahtsadf():
-            self.appRoot.after(2000, lambda: NotifierService.notify("This is a test notification! har har har!"))
-
-        self.ui.addCommand("notify_test", ashkjsahtsadf)
+        # Schedule next update
+        self.appRoot.after(1000, self._updatePerformanceDisplay)

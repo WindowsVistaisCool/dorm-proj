@@ -2,6 +2,7 @@ import customtkinter as ctk
 import time
 from datetime import datetime
 from threading import Thread
+import os
 
 from Configurator import Configurator
 from LEDLoops import LEDThemes
@@ -17,6 +18,15 @@ from pages.LEDs import LEDsPage
 from pages.Home import HomePage
 from pages.Settings import SettingsPage
 
+# Try to import performance monitoring
+try:
+    from lib.PerformanceMonitor import start_performance_monitoring
+    PERFORMANCE_MONITORING = True
+except ImportError:
+    PERFORMANCE_MONITORING = False
+    def start_performance_monitoring():
+        pass
+
 class App(QuackApp):
     VERSION = f"v1{'-dev' if isDev() else ''}"
     APP_TITLE = "QuackDE"
@@ -24,6 +34,17 @@ class App(QuackApp):
     FONT_NAME = "Ubuntu Mono"
 
     def __init__(self):
+        # SAFE optimization: Try to suggest UI cores, but don't force it
+        try:
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            if cpu_count >= 4:
+                # Suggest using cores 0-1 for UI, but don't force it
+                os.sched_setaffinity(0, {0, 1})
+        except (OSError, AttributeError, ImportError):
+            # Not available or not permitted - continue normally
+            pass
+            
         Configurator.initialize(self.APP_TITLE)
         ctk.set_appearance_mode(Configurator.getInstance().getAppearanceMode())
         ctk.set_default_color_theme(Configurator.getInstance().getTheme())
@@ -92,14 +113,13 @@ class App(QuackApp):
                     corner_radius=20
                     ).grid(row=3, column=0, padx=20, pady=(15, 0), sticky="new")
 
-        # if isDev():
-        #     self.ui.add(ctk.CTkButton, "nav_debug",
-        #                 root=self.navbar.getInstance(),
-        #                 text="Debug",
-        #                 font=(self.FONT_NAME, 18),
-        #                 width=150, height=60,
-        #                 corner_radius=20
-        #                 ).grid(row=4, column=0, padx=20, pady=(10, 0), sticky="sew")
+        self.ui.add(ctk.CTkButton, "nav_debug",
+                    root=self.navbar.getInstance(),
+                    text="Debug",
+                    font=(self.FONT_NAME, 18),
+                    width=150, height=60,
+                    corner_radius=20
+                    ).grid(row=4, column=0, padx=20, pady=(10, 0), sticky="sew")
 
         self.ui.add(ctk.CTkButton, "nav_settings", 
                     root=self.navbar.getInstance(),
@@ -125,8 +145,7 @@ class App(QuackApp):
     def _initCommands(self):
         self.ui.addCommand("nav_home", lambda: self.navigation.navigate(HomePage))
         self.ui.addCommand("nav_leds", lambda: self.navigation.navigate(LEDsPage))
-        # if isDev():
-        #     self.ui.addCommand("nav_debug", lambda: self.navigation.navigate(DebugPage))
+        self.ui.addCommand("nav_debug", lambda: self.navigation.navigate(DebugPage))
         self.ui.addCommand("nav_settings", lambda: self.navigation.navigate(SettingsPage))
 
         # initilaze the clock
@@ -144,11 +163,15 @@ class App(QuackApp):
     def _addPages(self):
         HomePage(self.navigation, self, self.content_root.getInstance())
         LEDsPage(self.navigation, self, self.content_root.getInstance())
-        # DebugPage(self.navigation, self, self.content_root.getInstance())
+        DebugPage(self.navigation, self, self.content_root.getInstance())
         SettingsPage(self.navigation, self, self.content_root.getInstance())
 
         self.navigation.getPage(HomePage).updateGreeting(datetime.now())
         self.clock_thread().start()
+
+        # Start performance monitoring if available
+        if PERFORMANCE_MONITORING:
+            start_performance_monitoring()
 
         self.navigation.navigate(HomePage)
 

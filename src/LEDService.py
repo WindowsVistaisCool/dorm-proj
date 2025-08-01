@@ -5,10 +5,20 @@ if TYPE_CHECKING:
 import threading
 import time
 import traceback
+import os
 import rpi_ws281x as ws
 
 from LEDLoops import LEDThemes
 from lib.led.LEDTheme import LEDTheme
+
+# Try to import performance monitoring, but don't fail if not available
+try:
+    from lib.PerformanceMonitor import record_led_frame
+    PERFORMANCE_MONITORING = True
+except ImportError:
+    PERFORMANCE_MONITORING = False
+    def record_led_frame(frame_time: float):
+        pass
 
 class LEDService:
     _instance = None
@@ -49,13 +59,35 @@ class LEDService:
 
         self.errorCallback = lambda e: print(e)
 
-        # Create and start the single persistent thread
+        # Create and start the single persistent thread with optimized settings
         self.loopThread = threading.Thread(target=self._ledLoopTarget, daemon=True)
         self.loopThread.start()
 
         LEDService._instance = self
 
     def _ledLoopTarget(self):
+        # SAFE optimizations only - no kernel-level changes
+        try:
+            # Try to set a mild priority boost (safe, user-level)
+            os.nice(-5)  # Small priority increase for LED thread
+        except (PermissionError, OSError):
+            pass  # Silently continue if not permitted
+        
+        # Try to suggest CPU affinity but don't force it
+        try:
+            # Only attempt if we can detect multiple cores safely
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            if cpu_count >= 4:
+                # Suggest using cores 2-3 for LED processing, but don't force it
+                os.sched_setaffinity(0, {2, 3})
+        except (OSError, AttributeError, ImportError):
+            # Not available or not permitted - continue normally
+            pass
+            
+        frame_time_target = 1.0 / 60.0  # Target 60 FPS for smooth LED updates
+        last_frame_time = time.time()
+        
         while self._isRunning:
             # Wait for a loop to be set or service to stop
             if self.loop is None or self.loop.id == "null":
@@ -80,7 +112,8 @@ class LEDService:
             
             # Run the loop until break or loop change
             while not self._breakLoopEvent.is_set() and self._isRunning and not self._loopChangeEvent.is_set():
-                time.sleep(0.001)
+                frame_start = time.time()
+                
                 try:
                     stat = self.loop.runLoop()
                     if stat is not None:
@@ -90,6 +123,21 @@ class LEDService:
                     self.errorCallback(traceback.format_exc())
                     self._breakLoopEvent.set()
                     break
+                
+                # Record frame time for performance monitoring
+                frame_elapsed = time.time() - frame_start
+                if PERFORMANCE_MONITORING:
+                    record_led_frame(frame_elapsed)
+                
+                # Frame rate limiting - maintain consistent 60 FPS
+                sleep_time = max(0, frame_time_target - frame_elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                    
+                # Yield to other threads occasionally
+                if time.time() - last_frame_time > 0.016:  # ~60 FPS check
+                    time.sleep(0.001)  # Brief yield
+                    last_frame_time = time.time()
             
             # Clear events for next loop
             self._breakLoopEvent.clear()
